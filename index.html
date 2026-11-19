@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VRM Raw Mill Simulator – Fuller Loesche LM 59.42</title>
+  <meta name="description" content="Simulator edukasi vertical roller mill raw meal: material, operasi, kualitas, energi.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ================= HEADER / KONTROL SIMULASI ================= -->
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32"><ellipse cx="16" cy="22" rx="12" ry="4" fill="#3987e5"/><rect x="6" y="8" width="20" height="14" fill="#24486e"/><ellipse cx="16" cy="8" rx="10" ry="3.4" fill="#5aa0ef"/></svg>
+    </div>
+    <div>
+      <h1>VRM Raw Mill Simulator</h1>
+      <div class="sub">Fuller Loesche LM 59.42 · model semi-empiris</div>
+    </div>
+  </div>
+
+  <div class="sim-controls">
+    <button id="btnPlay" class="btn btn-primary" title="Jalankan / jeda simulasi (Spasi)">⏸ Jeda</button>
+    <button id="btnReset" class="btn" title="Reset simulasi ke kondisi default">⟲ Reset</button>
+    <div class="seg" id="speedSeg" role="group" aria-label="Percepatan waktu">
+      <button data-speed="1" class="active">1×</button><button data-speed="5">5×</button><button data-speed="20">20×</button><button data-speed="60">60×</button>
+    </div>
+    <div class="clock" title="Waktu simulasi"><span class="muted">t =</span> <span id="simClock">00:00:00</span></div>
+  </div>
+
+  <div class="sim-controls">
+    <div class="seg" id="modeSeg" role="group" aria-label="Mode kontrol" title="Manual: operator mengatur suhu hot gas & fan. Auto: PID mengatur suhu outlet (via hot gas) dan DP (via fan).">
+      <button data-mode="manual" class="active">Manual</button><button data-mode="auto">Auto (PID)</button>
+    </div>
+    <button id="btnMill" class="btn btn-danger" title="Start / stop motor mill">■ Stop mill</button>
+    <div class="health" id="healthBadge" title="Skor kesehatan proses (0–100)"><span class="muted">Kesehatan</span> <b id="healthVal">100</b></div>
+    <button id="btnCsv" class="btn" title="Ekspor data simulasi ke CSV">⬇ CSV</button>
+    <button id="btnPrint" class="btn" title="Cetak laporan ringkas">🖶 Laporan</button>
+  </div>
+</header>
+
+<div class="disclaimer">
+  <span>⚠ Model <b>semi-empiris untuk edukasi dan analisis what-if</b>, bukan digital twin tervalidasi. Spesifikasi mill adalah asumsi — verifikasi dengan nameplate/OEM.</span>
+  <span id="tripBanner" class="trip-banner" hidden></span>
+</div>
+
+<div class="layout">
+  <!-- ================= SIDEBAR: PARAMETER OPERASI ================= -->
+  <aside class="sidebar" id="sidebar">
+    <div class="panel-title">Parameter operasi <span class="tip" data-tip="Geser slider atau ketik angka. Nilai di luar batas otomatis di-clamp. Pada mode Auto, suhu hot gas dan fan diatur PID.">ⓘ</span></div>
+    <div id="opSliders"></div>
+    <div class="sidebar-foot">
+      <button id="btnOpDefault" class="btn btn-sm">Kembalikan default operasi</button>
+    </div>
+  </aside>
+
+  <!-- ================= AREA UTAMA (TAB) ================= -->
+  <main class="main">
+    <nav class="tabs" id="tabs" role="tablist">
+      <button data-tab="tab3d" class="active">Simulasi 3D</button>
+      <button data-tab="tabMat">Material</button>
+      <button data-tab="tabOps">Operasi</button>
+      <button data-tab="tabQual">Kualitas</button>
+      <button data-tab="tabScen">Skenario</button>
+      <button data-tab="tabSus">Sustainability</button>
+      <button data-tab="tabCal">Kalibrasi</button>
+      <button data-tab="tabAbout">Tentang Model</button>
+    </nav>
+
+    <!-- ---------- TAB SIMULASI 3D ---------- -->
+    <section id="tab3d" class="tab active">
+      <div class="kpi-strip" id="kpiStrip"></div>
+      <div class="grid-3d">
+        <div class="card mill-card">
+          <div class="mill-toolbar">
+            <span class="muted">Sudut pandang</span>
+            <input type="range" id="viewAngle" min="0" max="359" value="0" aria-label="Sudut pandang">
+            <span id="viewAngleVal" class="mono">0°</span>
+            <div class="seg seg-sm" id="viewSeg">
+              <button data-a="0">1</button><button data-a="90">2</button><button data-a="180">3</button><button data-a="270">4</button>
+            </div>
+            <button class="btn btn-sm" id="zoomIn" title="Perbesar">＋</button>
+            <button class="btn btn-sm" id="zoomOut" title="Perkecil">－</button>
+            <button class="btn btn-sm" id="viewReset" title="Reset tampilan">⤢</button>
+            <label class="chk"><input type="checkbox" id="chkLabels" checked> Label</label>
+          </div>
+          <div id="millView" class="mill-view"></div>
+          <div class="mill-legend">
+            <span>Gas:</span><span class="temp-scale"></span><span class="muted">60 °C → 330 °C</span>
+            <span class="lg"><i style="background:#a07850"></i>umpan</span>
+            <span class="lg"><i style="background:#cfae7a"></i>naik bersama gas</span>
+            <span class="lg"><i style="background:#c0915a"></i>reject separator</span>
+            <span class="lg"><i style="background:#f2e6c9"></i>produk halus</span>
+            <span class="muted hint">Seret = geser · roda mouse = zoom · Shift+seret = putar · hover komponen = nilai live</span>
+          </div>
+        </div>
+        <div class="side-col">
+          <div class="card">
+            <div class="card-title">Alarm aktif</div>
+            <ul class="alarm-list" id="alarmList3d"></ul>
+          </div>
+          <div class="card">
+            <div class="card-title">Kesiapan umpan kiln</div>
+            <div id="kilnReady3d"></div>
+          </div>
+          <div class="card">
+            <div class="card-title">Gangguan cepat</div>
+            <div class="dist-grid" id="distQuick"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Flowsheet proses <span class="muted">(nilai live)</span></div>
+        <div id="flowsheet" class="flowsheet"></div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB MATERIAL ---------- -->
+    <section id="tabMat" class="tab">
+      <div class="card">
+        <div class="card-title">Komposisi bahan baku <span class="tip" data-tip="Proporsi basis kering. Total dinormalisasi otomatis ke 100 %. Oksida dalam % massa basis kering.">ⓘ</span>
+          <div class="card-actions">
+            <button class="btn btn-sm" id="btnNormalize">Normalisasi 100 %</button>
+            <button class="btn btn-sm" id="btnMatDefault">Preset default</button>
+            <button class="btn btn-sm" id="btnMatExport">Ekspor JSON</button>
+            <label class="btn btn-sm">Impor JSON<input type="file" id="matImport" accept=".json,application/json" hidden></label>
+          </div>
+        </div>
+        <div class="table-wrap"><table class="mat-table" id="matTable"></table></div>
+        <div id="matMsg" class="msg"></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Kimia raw meal (hasil campuran)</div>
+          <div id="chemResult"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Mix design solver <span class="tip" data-tip="Mencari proporsi (≥0, total 100 %) agar LSF/SM/AM mendekati target memakai coordinate search berpasangan, multi-start.">ⓘ</span></div>
+          <div class="form-row" id="targetChemForm"></div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btnSolve">Hitung proporsi</button>
+            <button class="btn" id="btnApplySolve" disabled>Terapkan ke simulasi</button>
+          </div>
+          <div id="solveResult"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB OPERASI ---------- -->
+    <section id="tabOps" class="tab">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Tuning PID <span class="tip" data-tip="Loop 1: suhu outlet → manipulasi suhu hot gas inlet. Loop 2: DP mill → manipulasi fan %. Anti-windup & bumpless transfer aktif.">ⓘ</span></div>
+          <div id="pidForm"></div>
+          <p class="muted small">Kp dalam satuan output per satuan error; Ki per detik; Kd dalam detik. Aktifkan mode <b>Auto (PID)</b> di bagian atas.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Gangguan proses <span class="tip" data-tip="Klik untuk mengaktifkan, klik lagi untuk memulihkan. Gangguan masuk lewat belt (delay) seperti di plant.">ⓘ</span></div>
+          <div class="dist-grid" id="distFull"></div>
+          <label class="chk"><input type="checkbox" id="chkNoise" checked> Variasi acak bahan & feeder (noise)</label>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Parameter dinamika <span class="tip" data-tip="Konstanta waktu (τ) dan dead time dalam detik simulasi.">ⓘ</span></div>
+          <div id="dynForm" class="form-grid"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Interlock & log alarm</div>
+          <ul class="small muted interlock">
+            <li>Trip bila getaran &gt; batas trip selama ≥ 3 s</li>
+            <li>Trip bila daya motor &gt; 110 % selama 10 s</li>
+            <li>Trip bila suhu outlet &gt; 125 °C selama 10 s</li>
+          </ul>
+          <div class="log-wrap"><table class="log-table" id="alarmLog"></table></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB KUALITAS ---------- -->
+    <section id="tabQual" class="tab">
+      <div class="grid-qual-top">
+        <div class="card">
+          <div class="card-title">Kesehatan proses</div>
+          <div id="healthBig"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Kesiapan umpan kiln</div>
+          <div id="kilnReady"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Target kualitas</div>
+          <div id="targetQualForm" class="form-grid"></div>
+        </div>
+      </div>
+      <div class="kpi-grid" id="kpiGrid"></div>
+      <div class="card">
+        <div class="card-title">Penjelasan alarm otomatis</div>
+        <ul class="alarm-list detailed" id="alarmListQual"></ul>
+      </div>
+      <div class="card">
+        <div class="card-title">Tren 30 menit simulasi terakhir <span class="muted">(pita abu-abu = band target)</span></div>
+        <div class="trend-grid" id="trendGrid"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Distribusi ukuran partikel (Rosin-Rammler) vs spesifikasi</div>
+        <div id="psdChart" class="chart-lg"></div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB SKENARIO ---------- -->
+    <section id="tabScen" class="tab">
+      <div class="card">
+        <div class="card-title">Preset skenario</div>
+        <div class="btn-row" id="presetRow"></div>
+        <div id="presetMsg" class="msg"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Simpan & bandingkan skenario <span class="tip" data-tip="Menyimpan parameter operasi, material dan hasil saat ini ke localStorage browser.">ⓘ</span></div>
+        <div class="btn-row" id="scenButtons"></div>
+        <div class="table-wrap"><table class="cmp-table" id="scenTable"></table></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Sweep parameter (steady-state) <span class="tip" data-tip="Model steady-state dievaluasi pada rentang satu parameter, parameter lain tetap pada nilai saat ini (mode manual, suhu hot gas tetap).">ⓘ</span></div>
+          <div class="form-row">
+            <label>Parameter <select id="sweepParam"></select></label>
+            <label>Min <input type="text" inputmode="decimal" id="sweepMin" class="num"></label>
+            <label>Max <input type="text" inputmode="decimal" id="sweepMax" class="num"></label>
+            <button class="btn btn-primary" id="btnSweep">Jalankan</button>
+          </div>
+          <div id="sweepCharts" class="sweep-grid"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Optimizer energi <span class="tip" data-tip="Grid search 9×9×9 + pattern search pada feed, rpm separator dan tekanan gilas. Minimalkan kWh/t dengan constraint R90 ≤ target, getaran < batas warning, moisture ≤ batas, DP ≤ batas, daya motor ≤ batas.">ⓘ</span></div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btnOptimize">Cari optimum</button>
+            <button class="btn" id="btnApplyOpt" disabled>Terapkan ke simulasi</button>
+          </div>
+          <div id="optResult"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB SUSTAINABILITY ---------- -->
+    <section id="tabSus" class="tab">
+      <div class="kpi-grid" id="susKpi"></div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Rincian konsumsi energi listrik</div>
+          <div id="energyBreak"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Potensi penghematan bila R90 dilonggarkan</div>
+          <div id="relaxR90"></div>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Dampak indikatif fineness ke kiln</div>
+          <div id="kilnImpact"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Saran efisiensi otomatis</div>
+          <ul id="susTips" class="tips"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB KALIBRASI ---------- -->
+    <section id="tabCal" class="tab">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Spesifikasi mill <span class="badge-warn">⚠ asumsi, verifikasi dengan nameplate/OEM</span></div>
+          <div id="millSpecForm" class="form-grid"></div>
+          <button class="btn btn-sm" id="btnSpecDefault">Kembalikan default</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Koefisien model utama <span class="tip" data-tip="Koefisien paling berpengaruh. Lihat README untuk penjelasan & urutan kalibrasi yang disarankan.">ⓘ</span></div>
+          <div id="coefForm" class="form-grid"></div>
+          <button class="btn btn-sm" id="btnCoefDefault">Kembalikan default koefisien</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Prediksi vs data plant (unggah CSV)
+          <div class="card-actions">
+            <button class="btn btn-sm" id="btnCsvDemo">Coba data contoh</button>
+            <button class="btn btn-sm" id="btnCsvTemplate">Unduh template + contoh</button>
+            <label class="btn btn-sm btn-primary">Unggah CSV<input type="file" id="plantCsv" accept=".csv,text/csv" hidden></label>
+          </div>
+        </div>
+        <p class="muted small">Kolom yang dikenali: <code>feed, pressure, dam, sepRpm, fan, tIn, spray</code> (input) dan <code>R90, R200, kWh_t, DP, tOut, moist</code> (aktual). Pemisah koma atau titik-koma. Input yang tidak ada memakai nilai operasi saat ini; material memakai komposisi di tab Material.</p>
+        <div id="calResult"></div>
+      </div>
+    </section>
+
+    <!-- ---------- TAB TENTANG MODEL ---------- -->
+    <section id="tabAbout" class="tab">
+      <div class="card prose">
+        <h2>Tentang model</h2>
+        <p class="warnbox">Simulator ini adalah <b>model semi-empiris untuk edukasi dan analisis what-if</b>. Koefisiennya dipilih agar arah dan orde besaran respons masuk akal untuk VRM raw meal ±400 t/h, <b>bukan</b> hasil validasi terhadap mill tertentu. Jangan gunakan untuk keputusan operasi tanpa kalibrasi dengan data plant.</p>
+        <h3>Alur perhitungan</h3>
+        <ol>
+          <li><b>Kimia</b>: oksida campuran = Σ proporsi·oksida (basis kering) → basis bebas LOI = oksida/(1−LOI/100).
+            LSF = 100·CaO/(2,8·SiO₂ + 1,18·Al₂O₃ + 0,65·Fe₂O₃); SM = SiO₂/(Al₂O₃+Fe₂O₃); AM = Al₂O₃/Fe₂O₃; Bogue (basis bebas LOI) sebagai indikasi burnability.</li>
+          <li><b>Bed &amp; gilas</b> (iterasi titik tetap): tebal bed = k<sub>dam</sub>·dam·(load index)<sup>0,45</sup> − k<sub>P</sub>·(P−P<sub>nom</sub>);
+            daya gilas ∝ P·√(bed/75); energi spesifik = e<sub>ref</sub>·(BWI/BWI<sub>ref</sub>)·(x<sub>ref</sub>/x′)<sup>0,5</sup>·f<sub>bed</sub>; kapasitas = daya gilas / energi spesifik; load ratio = feed kering / kapasitas.</li>
+          <li><b>Separator &amp; PSD</b>: x′ = x<sub>ref</sub>·(rpm<sub>ref</sub>/rpm)<sup>1,1</sup>·(gas/gas<sub>ref</sub>)<sup>0,6</sup>·L<sup>0,3</sup>; R(x) = 100·exp(−(x/x′)<sup>n</sup>) → R90, R200. Circulating load = CL<sub>ref</sub>·(rpm/rpm<sub>ref</sub>)<sup>1,3</sup>·L<sup>1,2</sup>·(gas/gas<sub>ref</sub>)<sup>−0,8</sup>.</li>
+          <li><b>DP mill</b> = DP<sub>gas</sub>·(gas/gas<sub>ref</sub>)<sup>1,8</sup> + DP<sub>load</sub>·load index + k<sub>dam</sub>·(dam−150).</li>
+          <li><b>Getaran</b> = dasar + suku bed tipis + suku tekanan/bed + suku bed tebal + suku overload + suku material kering.</li>
+          <li><b>Neraca panas</b>: m<sub>g</sub>c<sub>p</sub>(T<sub>in</sub>−T<sub>out</sub>) + panas gilas = Q<sub>evap</sub> + pemanasan material + false air + rugi dinding, dengan Q<sub>evap</sub> = m<sub>air</sub>·(2500 kJ/kg + c<sub>p,uap</sub>·ΔT) → T<sub>out</sub>. Moisture produk = f(T<sub>out</sub>, moisture umpan, waktu tinggal).</li>
+          <li><b>Energi</b>: kWh/t = (daya mill + fan + separator)/throughput; daya fan = Q<sub>aktual</sub>·(DP mill + DP sistem)/η. MJ/t = panas yang diserahkan gas / throughput. CO₂ = kWh/t·EF<sub>grid</sub> + MJ/t·fraksi bahan bakar·EF<sub>bahan bakar</sub>.</li>
+          <li><b>Dinamika</b>: delay belt, dead time + lag orde-1 untuk bed, suhu, DP, PSD, kimia; PID untuk suhu outlet dan DP; interlock trip.</li>
+        </ol>
+        <h3>Keterbatasan utama</h3>
+        <ul>
+          <li>Tidak memodelkan keausan roller/meja, distribusi aliran gas non-uniform, pembentukan "rat hole", atau perilaku hidrolik akumulator.</li>
+          <li>Separator diwakili satu ukuran karakteristik Rosin-Rammler; kurva Tromp tidak dimodelkan eksplisit.</li>
+          <li>Throughput tunak = feed (neraca massa); kapasitas gilas memengaruhi sirkulasi, DP, kehalusan dan getaran.</li>
+          <li>Emisi CO₂ dan dampak ke kiln bersifat indikatif.</li>
+        </ul>
+        <p>Detail rumus, daftar asumsi dan koefisien yang perlu dikalibrasi ada di <code>README.md</code>.</p>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- Laporan cetak (diisi saat tombol Laporan ditekan) -->
+<div id="printReport" class="print-only"></div>
+
+<!-- Urutan script penting: config → model → sim → mill3d → ui -->
+<script src="config.js"></script>
+<script src="model.js"></script>
+<script src="sim.js"></script>
+<script src="mill3d.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>
